@@ -1,0 +1,97 @@
+@font-face {
+    font-family: 'Linux Libertine';
+    src: url('../static/LinLibertine_Rah.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    background: url("../static/billy-huynh-278252-unsplash-small.jpg") fixed;
+    background-size: cover;
+    color: white;
+    margin: 0px;
+    padding: 0px;
+    font-family: 'Linux Libertine', serif;
+    line-height: 1.6em;
+    font-size: 20px;
+}
+
+a:link, a:visited, a:active {
+    color: #3498db;
+}
+
+a:hover {
+    color: #2980b9;
+}
+
+
+h1 > a {
+    text-decoration: none;
+}
+
+blockquote {
+    border: 1px solid #3498db;
+    border-left: 5px solid #3498db;
+    padding: 15px 30px;
+    text-align: justify;
+}
+
+blockquote > p {
+    font-size: 1.2em;
+}
+
+#overlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    min-width: 100%;
+    min-height: 100%;
+    width: auto;
+    height: auto;
+    z-index: -99;
+    transform: translateX(-50%) translateY(-50%);
+    background: url(../static/overlay-video-dark.png);
+}
+
+#container {
+    max-width: 777px;
+    margin: 100px auto;
+}
+
+.stdout {
+    background: hsla(0, 0%, 0%, 0.9);
+    border-radius: 5px;
+    box-shadow: 0px 0px 5px black;
+    color: #BBB;
+    font-family: mono, monospace;
+    margin-bottom: 5px;
+    padding: 15px 30px;
+}
+
+.stdin {
+    background: hsla(0, 0%, 0%, 0.9);
+    border-radius: 5px;
+    box-shadow: 0px 0px 5px black;
+    color: #777;
+    font-family: mono, monospace;
+    margin-bottom: 10px;
+    padding: 5px 10px;
+}
+
+#input {
+    background: hsla(0, 0%, 100%, 0.7);
+    border-radius: 5px;
+    border: 1px solid white;
+    box-shadow: 0px 0px 5px black;
+    color: white;
+    font-family: mono, monospace;
+    font-size: 20px;
+    padding: 5px 10px;
+    width: 100%;
+    color: black;
+}
