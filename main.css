@@ -25,6 +25,13 @@
     display: none;
 }
 
+#xhr {
+    display: none;
+    position: fixed;
+    bottom: 15px;
+    right: 15px;
+}
+
 /* loading spinner, taken from https://loading.io/css/ */
 
 .lds-ellipsis {

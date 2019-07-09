@@ -25,20 +25,21 @@ let xhr = function(request) {
         request = new Request(path, {"method": "POST", "body": body});
     }
     xhrInProgress = true;
-    sleep(100).then(function() {
-        fetch(request)
-            .then(function(response) {
-                return response.json();
-            })
-            .then(function(json) {
-                if (xhrInProgress === true) {
-                    // TODO: add response status
-                    // return the xhr response to Scheme
-                    document.scheme_inbox = JSON.stringify(["xhr", json]);
-                    document.resume();
-                }
-            });
-    })
+    document.querySelector('#xhr').style.display = "block";
+    fetch(request)
+        .then(function(response) {
+            return response.json();
+        })
+        .then(function(json) {
+            if (xhrInProgress === true) {
+                xhrInProgress = false;
+                document.querySelector('#xhr').style.display = "none";
+                // TODO: add response status
+                // return the xhr response to Scheme
+                document.scheme_inbox = JSON.stringify(["xhr", json]);
+                document.resume();
+            }
+        });
 }
 
 // reactjs integration
@@ -68,6 +69,7 @@ let makeCallback = function(identifier) {
         // abandonned. MAYBE it will leak something scheme side. It is
         // somekind of throttling.
         xhrInProgress = false;
+        document.querySelector('#xhr').style.display = "none";
         return send(event, identifier);
     };
 }
