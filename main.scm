@@ -10,7 +10,7 @@
 (import (chibi parse))
 
 
-(write-string "chibi scheme is running...\n")
+(write-string "Chibi Scheme is running...\n")
 
 (eval-script! "document.resume = Module['resume']")
 
