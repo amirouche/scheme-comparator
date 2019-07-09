@@ -55,10 +55,10 @@
      ((equal? (caar alist) key) (cdar alist))
      (else (loop (cdr alist))))))
 
-;; prompt-like emulated with call/cc
+;; prompt emulated with call/cc
 
 (define %prompt #f)
-(define %xhr (list 'xhr))
+(define %escape (list 'escape))
 
 (define (call-with-prompt thunk handler)
   (call-with-values (lambda ()
@@ -68,7 +68,7 @@
                          (thunk))))
     (lambda out
       (cond
-       ((and (pair? out) (eq? (car out) %xhr))
+       ((and (pair? out) (eq? (car out) %escape))
         (apply handler (cdr out)))
        (else (apply values out))))))
 
@@ -77,7 +77,7 @@
    (lambda (k)
      (let ((prompt %prompt))
        (set! %prompt #f)
-       (apply prompt (cons %xhr (cons k args)))))))
+       (apply prompt (cons %escape (cons k args)))))))
 
 
 ;; parse json
