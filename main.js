@@ -1,3 +1,6 @@
+document.querySelector('#noscript').style.display = "none";
+document.querySelector('#loading').style.display = "block";
+
 let ReactDOM = helpers.default.ReactDOM;
 let h = helpers.default.h;
 
