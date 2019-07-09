@@ -81,6 +81,32 @@
             (rm assoc (car keys))
             (set assoc (car keys) new)))))
 
+
+;; prompt-like emulated with call/cc
+
+(define %prompt #f)
+(define %xhr (list 'xhr))
+
+(define (call-with-prompt thunk handler)
+  (call-with-values (lambda ()
+                      (call/cc
+                       (lambda (k)
+                         (set! %prompt k)
+                         (thunk))))
+    (lambda out
+      (cond
+       ((and (pair? out) (eq? (car out) %xhr))
+        (apply handler (cdr out)))
+       (else (apply values out))))))
+
+(define (abort-to-prompt . args)
+  (call/cc
+   (lambda (k)
+     (let ((prompt %prompt))
+       (set! %prompt #f)
+       (apply prompt (cons %xhr (cons k args)))))))
+
+
 ;; parse json
 ;;
 ;; MIT License
@@ -245,31 +271,46 @@
 (define (send-to-javascript! obj)
   (eval-script! (string-append "document.javascript_inbox = " (sexp->json obj) ";")))
 
-(define (patch-the-dom!)
-  (eval-script! "document.patch()"))
-
 (define (render! model)
   (let ((sxml (view model)))
     (call-with-values (lambda () (sxml->snabbdom+callbacks sxml))
       (lambda (snabbdom callbacks)
-        (send-to-javascript! snabbdom)
-        (patch-the-dom!)
+        (send-to-javascript! (list "patch" snabbdom))
         callbacks))))
 
-(define (control model callbacks event)
+(define (xhr method path obj)
+  (abort-to-prompt (list "xhr" (list method path obj))))
+
+(define (update model callbacks event)
   (let* ((event* event)
          (identifier (ref event* 'identifier)))
-    ((ref callbacks identifier) model event*)))
+    (let ((callback (ref callbacks identifier)))
+      (callback model event*))))
 
 (define (create-app init view)
-  (let ((model (init))
-        (callbacks '()))
-      (let loop ()
-        (set! callbacks (render! model))
+  (let ((model (init)))
+    (let loop1 ()
+      (let ((callbacks (render! model)))
         (wait-on-event!) ;; yields control back to the browser
-        (let ((event (recv-from-javascript)))
-          (set! model (control model callbacks event))
-          (loop)))))
+        (let loop2 ((event (recv-from-javascript))
+                    (k #f))
+          (cond
+           ((and (string=? (vector-ref event 0) "xhr") k)
+            (k (vector-ref event 1)))
+           ((and (string=? (vector-ref event 0) "xhr") (not k))
+            (error "Oops! Should not happen"))
+           ((string=? (vector-ref event 0) "event")
+            (when k
+              (pk "User, your wish is my command!..."))
+            (call-with-prompt
+             (lambda ()
+               (let ((new-model (update model callbacks (vector-ref event 1))))
+                 (set! model new-model)
+                 (loop1)))
+             (lambda (k obj)
+               (send-to-javascript! obj)
+               (wait-on-event!)
+               (loop2 (recv-from-javascript) k))))))))))
 
 ;; app
 
@@ -320,6 +361,7 @@
       (clear-input (set model 'convo new)))))
 
 (define (onSubmit model event)
+  (pk "proof xhr GET foo.json works!" (xhr "GET" "/foo.json" '()))
   (call/cc
    (lambda (k)
      (with-exception-handler
