@@ -12,9 +12,16 @@ function sleep(ms) {
 let xhrInProgress = false;
 
 let xhr = function(request) {
-    request = new Request(request[1]);
+    // initiate async GET or POST request
+    if (request[0] === "GET") {
+        let path = request[1]
+        request = new Request(path);
+    } else if (request[0] === "POST") {
+        let path = request[1]
+        let body = JSON.stringify(request[2]);
+        request = new Request(path, {"method": "POST", "body": body});
+    }
     xhrInProgress = true;
-    console.log('trying..............', request);
     sleep(100).then(function() {
         fetch(request)
             .then(function(response) {
@@ -22,7 +29,8 @@ let xhr = function(request) {
             })
             .then(function(json) {
                 if (xhrInProgress === true) {
-                    console.log(json);
+                    // TODO: add response status
+                    // return the xhr response to Scheme
                     document.scheme_inbox = JSON.stringify(["xhr", json]);
                     document.resume();
                 }
