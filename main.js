@@ -128,7 +128,7 @@ fetch("main.scm").then(function(response) {
     response.text().then(function(main) {
         document.javascript_inbox = undefined;
         window.requestAnimationFrame(loop); // !
-        console.log("starting chibi scheme...");
+        console.log("starting Chibi Scheme...");
         chibi = start(main, []);
     });
 })
