@@ -187,8 +187,9 @@
   ;; shake around the attrs to make them compatible with
   ;; react-hyperscript options, associate callbacks to integer
   ;; identifiers. The event on a given node is associated with an
-  ;; integer, the integer is associated with a callback. Return both
-  ;; react-hyperscript options and callbacks assoc.
+  ;; integer, the integer is associated with a callback
+  ;; procedure. Return both react-hyperscript options and
+  ;; integer-to-callback alist named `callbacks`.
   (let loop ((attrs attrs)
              (next-identifier next-identifier)
              (out '())
@@ -207,7 +208,7 @@
                      (acons key value out)
                      callbacks)))))))
 
-(define (%sxml->snabbdom+callbacks sxml callbacks)
+(define (%sxml->hyperscript+callbacks sxml callbacks)
   (match sxml
     ((? string? string)
      (values string '()))
@@ -219,11 +220,11 @@
                     (out '()))
            (if (null? rest)
                (values (make-node tag attrs (reverse out)) callbacks)
-               (call-with-values (lambda () (%sxml->snabbdom+callbacks (car rest) callbacks))
-                 (lambda (snabbdom new-callbacks)
+               (call-with-values (lambda () (%sxml->hyperscript+callbacks (car rest) callbacks))
+                 (lambda (hyperscript new-callbacks)
                    (loop (append callbacks new-callbacks)
                          (cdr rest)
-                         (cons snabbdom out)))))))))
+                         (cons hyperscript out)))))))))
     ((tag rest ...)
      ;; there is no magic but almost the same as above loop.
      (let loop ((callbacks callbacks)
@@ -231,12 +232,12 @@
                 (out '()))
        (if (null? rest)
            (values (make-node tag '() (reverse out)) callbacks)
-           (call-with-values (lambda () (%sxml->snabbdom+callbacks (car rest) callbacks))
-             (lambda (snabbdom callbacks)
-               (loop callbacks (cdr rest) (cons snabbdom out)))))))))
+           (call-with-values (lambda () (%sxml->hyperscript+callbacks (car rest) callbacks))
+             (lambda (hyperscript callbacks)
+               (loop callbacks (cdr rest) (cons hyperscript out)))))))))
 
-(define (sxml->snabbdom+callbacks sxml)
-  (%sxml->snabbdom+callbacks sxml '()))
+(define (sxml->hyperscript+callbacks sxml)
+  (%sxml->hyperscript+callbacks sxml '()))
 
 (define (recv-from-javascript)
   (json->sexp (string-eval-script "document.scheme_inbox")))
@@ -246,9 +247,9 @@
 
 (define (render! model)
   (let ((sxml (view model)))
-    (call-with-values (lambda () (sxml->snabbdom+callbacks sxml))
-      (lambda (snabbdom callbacks)
-        (send-to-javascript! (list "patch" snabbdom))
+    (call-with-values (lambda () (sxml->hyperscript+callbacks sxml))
+      (lambda (hyperscript callbacks)
+        (send-to-javascript! (list "patch" hyperscript))
         callbacks))))
 
 (define (xhr method path obj)
@@ -311,7 +312,7 @@
   `(div (@ (className "stdin")) ,string))
 
 (define (onChange model event)
-  (let ((input (ref* event 'event 'target.value)))
+  (let ((input (ref (ref event 'event) 'target.value)))
     (set model 'input input)))
 
 (define (clear-input model)
@@ -334,7 +335,7 @@
       (clear-input (set model 'convo new)))))
 
 (define (onSubmit model event)
-  (pk "proof xhr GET foo.json works!" (xhr "GET" "/foo.json" '()))
+  ;; (pk "proof xhr GET foo.json works!" (xhr "GET" "/foo.json" '()))
   (call/cc
    (lambda (k)
      (with-exception-handler
