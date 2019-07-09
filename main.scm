@@ -261,7 +261,24 @@
 (define (make-style alist)
   (cons '@ (%make-style alist)))
 
-;;
+;; override
+
+(define (%%merge first second)
+  (let loop ((second second)
+             (out first))
+    (if (null? second)
+        out
+        (loop (cdr second) (set out (caar second) (cdar second))))))
+
+(define (%merge first rest)
+  (let loop ((rest rest)
+             (out first))
+    (if (null? rest)
+        out
+        (loop (cdr rest) (%%merge out (car rest))))))
+
+(define (merge first second . other)
+  (%merge first (cons second other)))
 
 (define (recv-from-javascript)
   (json->sexp (string-eval-script "document.scheme_inbox")))
@@ -371,6 +388,11 @@
               (next-exercice model)
               (retry-exercice model))))))))
 
+
+(define input-style (merge '((marginTop . "15px"))
+                           '((background . "green"))
+                           '((marginTop . "30px"))))
+
 (define (view model)
   `(div
     ,(make-stdout intro)
@@ -386,7 +408,7 @@
     ,(make-stdout (car (list-ref exercices (ref model 'index))))
     (form (@ (onSubmit ,onSubmit))
           (input (@ (id "input")
-                    (style ,(make-style '((marginTop . "15px"))))
+                    (style ,(make-style input-style))
                     (autoFocus #t)
                     (type "text")
                     (value ,(ref model 'input))
