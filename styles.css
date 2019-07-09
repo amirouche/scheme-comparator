@@ -10,6 +10,78 @@
     box-sizing: border-box;
 }
 
+.stdin {
+    background: hsla(0, 0%, 0%, 0.9);
+    border-radius: 5px;
+    box-shadow: 0px 0px 5px black;
+    color: #777;
+    font-family: mono, monospace;
+    margin-bottom: 10px;
+    padding: 5px 10px;
+    text-align: center;
+}
+
+/* loading spinner, taken from https://loading.io/css/ */
+
+.lds-ellipsis {
+  display: inline-block;
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+.lds-ellipsis div {
+  position: absolute;
+  top: 27px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #777;
+  animation-timing-function: cubic-bezier(0, 1, 1, 0);
+}
+.lds-ellipsis div:nth-child(1) {
+  left: 6px;
+  animation: lds-ellipsis1 0.6s infinite;
+}
+.lds-ellipsis div:nth-child(2) {
+  left: 6px;
+  animation: lds-ellipsis2 0.6s infinite;
+}
+.lds-ellipsis div:nth-child(3) {
+  left: 26px;
+  animation: lds-ellipsis2 0.6s infinite;
+}
+.lds-ellipsis div:nth-child(4) {
+  left: 45px;
+  animation: lds-ellipsis3 0.6s infinite;
+}
+@keyframes lds-ellipsis1 {
+  0% {
+    transform: scale(0);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes lds-ellipsis3 {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(0);
+  }
+}
+@keyframes lds-ellipsis2 {
+  0% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(19px, 0);
+  }
+}
+
+/* end of loading spinner */
+
+
 body {
     background: url("../static/billy-huynh-278252-unsplash-small.jpg") fixed;
     background-size: cover;
@@ -73,15 +145,6 @@ blockquote > p {
     padding: 15px 30px;
 }
 
-.stdin {
-    background: hsla(0, 0%, 0%, 0.9);
-    border-radius: 5px;
-    box-shadow: 0px 0px 5px black;
-    color: #777;
-    font-family: mono, monospace;
-    margin-bottom: 10px;
-    padding: 5px 10px;
-}
 
 #input {
     background: hsla(0, 0%, 100%, 0.7);
