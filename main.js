@@ -4,8 +4,8 @@ let h = helpers.default.h;
 let container = document.getElementById('container');
 
 
-document.recv = function() {
-    let json = document.javascript;
+document.patch = function() {
+    let json = document.javascript_inbox;
     ReactDOM.render(
         translate(json),
         container,
@@ -18,7 +18,7 @@ let send = function(event, identifier) {
         "identifier": identifier,
         "event": {'target.value': event.target.value},
     };
-    document.scheme = JSON.stringify(msg);
+    document.scheme_inbox = JSON.stringify(msg);
     document.resume();
 }
 

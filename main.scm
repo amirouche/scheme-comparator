@@ -239,16 +239,25 @@
 (define (sxml->snabbdom+callbacks sxml)
   (%sxml->snabbdom+callbacks sxml '()))
 
+(define (recv-from-javascript)
+  (json->sexp (string-eval-script "document.scheme_inbox")))
+
+(define (send-to-javascript! obj)
+  (eval-script! (string-append "document.javascript_inbox = " (sexp->json obj) ";")))
+
+(define (patch-the-dom!)
+  (eval-script! "document.patch()"))
+
 (define (render! model)
   (let ((sxml (view model)))
     (call-with-values (lambda () (sxml->snabbdom+callbacks sxml))
       (lambda (snabbdom callbacks)
-        (eval-script! (string-append "document.javascript = " (sexp->json snabbdom) ";"))
-        (eval-script! "document.recv()") ;; patch the dom
+        (send-to-javascript! snabbdom)
+        (patch-the-dom!)
         callbacks))))
 
 (define (control model callbacks event)
-  (let* ((event* (json->sexp event))
+  (let* ((event* event)
          (identifier (ref event* 'identifier)))
     ((ref callbacks identifier) model event*)))
 
@@ -258,7 +267,7 @@
       (let loop ()
         (set! callbacks (render! model))
         (wait-on-event!) ;; yields control back to the browser
-        (let ((event (string-eval-script "document.scheme")))
+        (let ((event (recv-from-javascript)))
           (set! model (control model callbacks event))
           (loop)))))
 
