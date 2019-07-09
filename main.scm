@@ -55,33 +55,6 @@
      ((equal? (caar alist) key) (cdar alist))
      (else (loop (cdr alist))))))
 
-(define (ref* assoc . keys)
-  (let loop ((keys keys)
-             (assoc assoc))
-    (cond
-     ((eq? assoc #f) #f)
-     ((null? keys) assoc)
-     (else (loop (cdr keys) (ref assoc (car keys)))))))
-
-(define (set* assoc . args)
-  (let* ((args* (reverse args)) ;; XXX: WTF?!
-         (value (car args*))
-         (keys (reverse (cdr args*)))) ;; WTF?!
-    (let loop ((keys keys)
-               (assoc assoc))
-      (if (null? keys)
-          value
-          (set assoc (car keys) (loop (cdr keys) (or (ref assoc (car keys)) '())))))))
-
-(define (rm* assoc . keys)
-  (if (null? (cdr keys))
-      (rm assoc (car keys))
-      (let ((new (apply rm* (ref assoc (car keys)) (cdr keys))))
-        (if (null? new)
-            (rm assoc (car keys))
-            (set assoc (car keys) new)))))
-
-
 ;; prompt-like emulated with call/cc
 
 (define %prompt #f)
