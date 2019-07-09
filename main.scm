@@ -79,7 +79,6 @@
        (set! %prompt #f)
        (apply prompt (cons %escape (cons k args)))))))
 
-
 ;; parse json
 ;;
 ;; MIT License
@@ -239,6 +238,31 @@
 (define (sxml->hyperscript+callbacks sxml)
   (%sxml->hyperscript+callbacks sxml '()))
 
+;;; style helpers:
+
+;; make-style: translate css styles to reactjs styles
+
+(define (->reactjs symbol)
+  (let loop ((chars (string->list (symbol->string symbol)))
+             (out '()))
+    (if (null? chars)
+        (string->symbol (list->string (reverse out)))
+        (if (char=? (car chars) #\-)
+            (loop (cddr chars) (cons (char-upcase (cadr chars)) out))
+            (loop (cdr chars) (cons (car chars) out))))))
+
+(define (%make-style alist)
+  (let loop ((alist alist)
+             (out '()))
+    (if (null? alist)
+        out
+        (loop (cdr alist) (acons (->reactjs (caar alist)) (cdar alist) out)))))
+
+(define (make-style alist)
+  (cons '@ (%make-style alist)))
+
+;;
+
 (define (recv-from-javascript)
   (json->sexp (string-eval-script "document.scheme_inbox")))
 
@@ -335,7 +359,7 @@
       (clear-input (set model 'convo new)))))
 
 (define (onSubmit model event)
-  ;; (pk "proof xhr GET foo.json works!" (xhr "GET" "/foo.json" '()))
+  (pk "proof xhr GET foo.json works!" (xhr "GET" "/foo.json" '()))
   (call/cc
    (lambda (k)
      (with-exception-handler
@@ -362,6 +386,7 @@
     ,(make-stdout (car (list-ref exercices (ref model 'index))))
     (form (@ (onSubmit ,onSubmit))
           (input (@ (id "input")
+                    (style ,(make-style '((marginTop . "15px"))))
                     (autoFocus #t)
                     (type "text")
                     (value ,(ref model 'input))
