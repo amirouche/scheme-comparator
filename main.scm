@@ -389,9 +389,7 @@
               (retry-exercice model))))))))
 
 
-(define input-style (merge '((marginTop . "15px"))
-                           '((background . "green"))
-                           '((marginTop . "30px"))))
+(define input-style '((marginTop . "15px")))
 
 (define (view model)
   `(div
