@@ -1,6 +1,6 @@
+(import (scheme base))
 (import (chibi emscripten))
 
-(import (scheme base))
 (import (srfi 151)) ;; scheme bitwise
 (import (scheme case-lambda))
 (import (scheme char))
@@ -11,6 +11,7 @@
 (import (scheme generator))
 (import (scheme hash-table))
 (import (scheme list))
+(import (scheme sort))
 (import (scheme mapping))
 (import (scheme mapping hash))
 (import (scheme read))
@@ -23,7 +24,7 @@
 
 (write-string "Chibi Scheme is running...\n")
 
-;; (eval-script! "document.resume = Module['resume']")
+(eval-script! "document.resume = Module['resume']")
 
 ;; (scheme bytevector) shims that are (as of yet) missing from chibi
 
@@ -1097,7 +1098,7 @@
                 (out '()))
       (if (null? cx)
           (begin (assume (ok? (combinations tab) out))
-                 (sort! lex< out))
+                 (list-sort lex< out))
           (let loop2 ((L (map (lambda (i) (cons i (not (not (memv i (car cx)))))) tab))
                       (a '())
                       (b '()))
