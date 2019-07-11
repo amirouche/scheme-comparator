@@ -1,20 +1,58 @@
+(import (chibi emscripten))
+
 (import (scheme base))
+(import (srfi 151)) ;; scheme bitwise
+(import (scheme case-lambda))
 (import (scheme char))
 (import (scheme charset))
+(import (scheme comparator))
 (import (scheme cxr))
 (import (scheme eval))
+(import (scheme generator))
+(import (scheme hash-table))
 (import (scheme list))
+(import (scheme mapping))
+(import (scheme mapping hash))
 (import (scheme read))
 (import (scheme write))
 
-(import (chibi emscripten))
+
 (import (chibi match))
 (import (chibi parse))
 
 
 (write-string "Chibi Scheme is running...\n")
 
-(eval-script! "document.resume = Module['resume']")
+;; (eval-script! "document.resume = Module['resume']")
+
+;; (scheme bytevector) shims that are (as of yet) missing from chibi
+
+(define (bytevector=? bv other)
+  (if (not (bytevector-length bv) (bytevector-length other))
+      #f
+      (let loop ((index 0))
+        (if (zero? (- (bytevector-length bv) index))
+            #t
+            (if (not (bytevector-u8-ref bv index)
+                     (bytevector-u8-ref other index))
+                #f
+                (loop (+ index 1)))))))
+
+(define (u8-list->bytevector lst)
+  (let ((bv (make-bytevector (length lst))))
+    (let loop ((lst lst)
+               (index 0))
+      (unless (null? lst)
+        (bytevector-u8-set! bv index (car lst))
+        (loop (cdr lst) (+ index 1))))
+    bv))
+
+(define (bytevector->u8-list bv)
+  (let loop ((index 0)
+             (out '()))
+    (if (zero? (- (bytevector-length bv) index))
+        (reverse out)
+        (loop (+ index 1) (cons (bytevector-u8-ref bv index) out)))))
 
 ;; scheme helpers
 
@@ -24,6 +62,10 @@
      (define-syntax keyword
        (syntax-rules ()
          ((keyword args ...) body))))))
+
+(define (assume v)
+  (unless v
+    (error "assume error" v)))
 
 (define (scm->string scm)
   (let ((port (open-output-string)))
@@ -339,7 +381,6 @@
 (define (parse-string string)
   (apply %each (map (lambda (char) (lambda () (parse-xchar char))) (string->list string))))
 
-
 ;;; Commentary:
 ;;
 ;; arew json parser
@@ -561,6 +602,726 @@
     ((? symbol? sexp) (string-append "\"" (symbol->string sexp) "\""))
     ((? number? sexp) (number->string sexp))
     ((? string? sexp) (string-append "\"" (scheme-string->json-string sexp) "\""))))
+
+;;; Commentary
+;;
+;; SRFI-167: okvs
+;;
+
+(define-record-type <memorydb>
+  (make-memorydb store)
+  okvs?
+  (store memorydb-store memorydb-store!))
+
+(define (lexicographic<? bytevector other)
+  (negative? (lexicographic-compare bytevector other)))
+
+(define vector-hash
+  (comparator-hash-function
+   (make-vector-comparator (make-default-comparator)
+                           bytevector?
+                           bytevector-length
+                           bytevector-u8-ref)))
+
+(define (make-lexicographic-comparator)
+  (make-comparator bytevector? bytevector=? lexicographic<? vector-hash))
+
+(define (okvs home . args)
+  (make-memorydb (mapping (make-lexicographic-comparator))))
+
+(define (okvs-close . args)
+  #t)
+
+(define (okvs-debug okvs proc)
+  (mapping-for-each (memorydb-store okvs) proc))
+
+(define-record-type <transaction>
+  (make-transaction database store metadata)
+  okvs-transaction?
+  (database transaction-database transaction-database!)
+  (store transaction-store transaction-store!)
+  (metadata okvs-transaction-metadata))
+
+(define (okvs-transaction-begin database . args)
+  (make-transaction database
+                    (memorydb-store database)
+                    (make-hash-table (make-default-comparator))))
+
+(define (okvs-transaction-commit transaction . args)
+  (memorydb-store! (transaction-database transaction) (transaction-store transaction)))
+
+(define (okvs-transaction-roll-back transaction . args)
+  #f)
+
+(define (%okvs-in-transaction okvs proc failure success)
+  (let ((transaction (okvs-transaction-begin okvs)))
+    (guard (ex
+            (else
+             (okvs-transaction-roll-back transaction)
+             (failure ex)))
+      (call-with-values (lambda () (proc transaction))
+        (lambda out
+          (okvs-transaction-commit transaction)
+          (apply success out))))))
+
+(define okvs-in-transaction
+  (case-lambda
+    ((okvs proc) (okvs-in-transaction okvs proc raise values))
+    ((okvs proc failure) (okvs-in-transaction okvs proc failure values))
+    ((okvs proc failure success) (%okvs-in-transaction okvs proc failure success))))
+
+(define (okvs-ref transaction key)
+  (mapping-ref/default (transaction-store transaction) key #f))
+
+(define (okvs-set! transaction key value)
+  (transaction-store! transaction (mapping-set (transaction-store transaction) key value)))
+
+(define (okvs-delete! transaction key)
+  (transaction-store! transaction (mapping-delete (transaction-store transaction) key)))
+
+(define (okvs-range-remove! transaction start-key start-include? end-key end-include?)
+  (let ((generator (okvs-range transaction start-key start-include? end-key end-include?)))
+    (let loop ((pair (generator)))
+      (unless (eof-object? pair)
+        (let ((key (car pair)))
+          (okvs-delete! transaction key)
+          (loop (generator)))))))
+
+(define (lexicographic-compare bytevector other)
+  ;; Return -1 if BYTEVECTOR is before OTHER, 0 if equal
+  ;; and otherwise 1
+  (let ((end (min (bytevector-length bytevector)
+                  (bytevector-length other))))
+    (let loop ((index 0))
+      (if (zero? (- end index))
+          (if (= (bytevector-length bytevector)
+                 (bytevector-length other))
+              0
+              (if (< (bytevector-length bytevector)
+                     (bytevector-length other))
+                  -1
+                  1))
+          (let ((delta (- (bytevector-u8-ref bytevector index)
+                          (bytevector-u8-ref other index))))
+            (if (zero? delta)
+                (loop (+ 1 index))
+                (if (negative? delta)
+                    -1
+                    1)))))))
+
+(define (okvs-range-init store key)
+  (let ((value (mapping-ref/default store key #f)))
+    (if value
+        (list (cons key value))
+        '())))
+
+(define (okvs-range transaction start-key start-include? end-key end-include? . args)
+  (let* ((store (transaction-store transaction)))
+    (let loop ((key (mapping-key-successor store start-key (const #f)))
+               (out (if start-include?
+                        (okvs-range-init store start-key)
+                        '())))
+      (if (not key)
+          (list->generator (reverse! out))
+          (case (lexicographic-compare key end-key)
+            ((-1)
+             (loop (mapping-key-successor store key (const #f))
+                   (cons (cons key (mapping-ref/default store key #f)) out)))
+            ((0)
+             (if end-include?
+                 (loop #f (cons (cons key (mapping-ref/default store key #f)) out))
+                 (loop #f out)))
+            ((1) (loop #f out)))))))
+
+(define (strinc bytevector)
+  "Return the first bytevector that is not prefix of BYTEVECTOR"
+  ;; See https://git.io/fj34F, TODO: OPTIMIZE
+  (let ((bytes (reverse! (bytevector->u8-list bytevector))))
+    ;; strip #xFF
+    (let loop ((out bytes))
+      (when (null? out)
+        (error 'okvs "Key must contain at least one byte not equal to #xFF." bytevector))
+      (if (= (car out) #xFF)
+          (loop (cdr out))
+          (set! bytes out)))
+    ;; increment first byte, reverse and return the bytevector
+    (u8-list->bytevector (reverse! (cons (+ 1 (car bytes)) (cdr bytes))))))
+
+(define (okvs-prefix transaction prefix . config)
+  (apply okvs-range transaction prefix #t (strinc prefix) #f config))
+
+;;; Commentary
+;;
+;; pack / unpack
+;;
+
+(define *null* '(null))
+
+(define *null-code* #x00)
+;; variable length
+(define *bytes-code* #x01)
+(define *string-code* #x02)
+(define *symbol-code* #x03)
+(define *nested-code* #x05)
+;; integers
+(define *neg-int-start* #x0B)
+(define *int-zero-code* #x14)
+(define *pos-int-end* #x1D)
+;; double
+(define *double-code* #x21)
+;; true and false
+(define *false-code* #x26)
+(define *true-code* #x27)
+(define *escape-code* #xFF)
+
+;; pack
+
+(define (struct:pack>Q integer)
+  (let ((bytevector (make-bytevector 8 0)))
+    (let loop ((index 0))
+      (unless (= index 8)
+        (bytevector-u8-set! bytevector index (bitwise-and
+                                              (arithmetic-shift integer (- (* (- 7 index) 8)))
+                                              #xFF))
+        (loop (+ index 1))))
+    bytevector))
+
+(define (struct:unpack>Q bytevector)
+  (let loop ((index 0)
+             (out 0))
+    (if (= index 8)
+        out
+        (loop (+ index 1)
+              (+ out
+                 (arithmetic-shift
+                  (bytevector-u8-ref bytevector index)
+                  (* (- 7 index) 8)))))))
+
+(define (%%pack-bytes bv accumulator)
+  (let loop ((index 0))
+    (unless (= index (bytevector-length bv))
+      (let ((byte (bytevector-u8-ref bv index)))
+        (if (zero? byte)
+            (begin ;; escape null byte
+              (accumulator #x00)
+              (accumulator *escape-code*))
+            (accumulator byte))
+        (loop (+ index 1)))))
+  (accumulator #x00))
+
+(define *bigish* (arithmetic-shift 1 (* 8 8)))
+
+(define *limits*
+  (let ((limits (make-vector 9)))
+    (let loop ((index 0))
+      (unless (= index 9)
+        (vector-set! limits index (- (arithmetic-shift 1 (* index 8)) 1))
+        (loop (+ index 1))))
+    limits))
+
+(define (bisect vector value)
+  (let loop ((low 0)
+             (high (vector-length vector)))
+    (if (>= low high)
+        low
+        (let ((middle (quotient (+ low high) 2)))
+          (if (< (vector-ref vector middle) value)
+              (loop (+ middle 1) high)
+              (loop low middle))))))
+
+(define (%%pack-positive-integer integer accumulator)
+  (if (< integer *bigish*)
+      ;; small integer
+      (let* ((length (integer-length integer))
+             (n (exact (ceiling (/ length 8))))
+             (bv (struct:pack>Q integer)))
+        (accumulator (+ *int-zero-code* n))
+        (let loop ((index (- (bytevector-length bv) n)))
+          (unless (= index (bytevector-length bv))
+            (accumulator (bytevector-u8-ref bv index))
+            (loop (+ index 1)))))
+      ;; big integer
+      (let ((length (exact (floor (/ (+ (integer-length integer) 7) 8)))))
+        (accumulator *pos-int-end*)
+        (accumulator length)
+        (let loop ((index (- length 1)))
+          (unless (= index -1)
+            (accumulator (bitwise-and (arithmetic-shift integer (- (* 8 index)))
+                                      #xFF))
+            (loop (- index 1)))))))
+
+(define (%%pack-negative-integer integer accumulator)
+  (if (< (- integer) *bigish*)
+      ;; small negative integer
+      (let* ((n (bisect *limits* (- integer)))
+             (maxv (vector-ref *limits* n))
+             (bv (struct:pack>Q (+ maxv integer))))
+        (accumulator (- *int-zero-code* n))
+        (let loop ((index (- (bytevector-length bv) n)))
+          (unless (= index (bytevector-length bv))
+            (accumulator (bytevector-u8-ref bv index))
+            (loop (+ index 1)))))
+      ;; big negative integer
+      (let* ((length (exact (ceiling (/ (+ (integer-length integer) 7) 8))))
+             (integer (+ integer (- (arithmetic-shift 1 (* length 8)) 1))))
+        (accumulator *neg-int-start*)
+        (accumulator (bitwise-xor length #xFF))
+        (let loop ((index (- length 1)))
+          (unless (= index -1)
+            (accumulator (bitwise-and (arithmetic-shift integer (- (* 8 index)))
+                                      #xFF))
+            (loop (- index 1)))))))
+
+(define (%%pack accumulator)
+  (lambda (value)
+    (cond
+     ((eq? value *null*) (accumulator *null-code*))
+     ((eq? value #t) (accumulator *true-code*))
+     ((eq? value #f) (accumulator *false-code*))
+     ((bytevector? value) (accumulator *bytes-code*) (%%pack-bytes value accumulator))
+     ((string? value) (accumulator *string-code*) (%%pack-bytes (string->utf8 value) accumulator))
+     ((symbol? value)
+      (accumulator *symbol-code*)
+      (%%pack-bytes (string->utf8 (symbol->string value)) accumulator))
+     ;; integer
+     ((and (number? value) (exact? value) (< value 0)) (%%pack-negative-integer value accumulator))
+     ((and (number? value) (exact? value) (= value 0)) (accumulator *int-zero-code*))
+     ((and (number? value) (exact? value) (> value 0)) (%%pack-positive-integer value accumulator))
+     ;;
+     (else (error 'pack "unsupported data type" value)))))
+
+(define (%pack args accumulator)
+  (for-each (%%pack accumulator) args))
+
+(define (pack . args)
+  (let ((accumulator (bytevector-accumulator)))
+    (%pack args accumulator)
+    (accumulator (eof-object))))
+
+;; unpack
+
+(define (list->bytevector list)
+  (let ((vec (make-bytevector (length list) 0)))
+    (let loop ((i 0) (list list))
+      (if (null? list)
+          vec
+          (begin
+            (bytevector-u8-set! vec i (car list))
+            (loop (+ i 1) (cdr list)))))))
+
+(define (unpack-bytes bv position)
+  (let loop ((position position)
+             (out '()))
+    (if (zero? (bytevector-u8-ref bv position))
+        (cond
+         ;; end of bv
+         ((= (+ position 1) (bytevector-length bv))
+          (values (list->bytevector (reverse! out)) (+ position 1)))
+         ;; escaped null bytes
+         ((= (bytevector-u8-ref bv (+ position 1)) *escape-code*)
+          (loop (+ position 2) (cons #x00 out)))
+         ;; end of string
+         (else (values (list->bytevector (reverse! out)) (+ position 1))))
+        ;; just a byte
+        (loop (+ position 1) (cons (bytevector-u8-ref bv position) out)))))
+
+(define (unpack-positive-integer bv code position)
+  (let* ((n (- code 20))
+         (sub (make-bytevector 8 0)))
+    (let loop ((index 0))
+      (unless (= index n)
+        (bytevector-u8-set! sub (+ (- 8 n) index) (bytevector-u8-ref bv (+ position 1 index)))
+        (loop (+ index 1))))
+    (values (struct:unpack>Q sub) (+ position 1 n))))
+
+(define (unpack-negative-integer bv code position)
+  (let* ((n (- 20 code))
+         (maxv (vector-ref *limits* n))
+         (sub (make-bytevector 8 0)))
+    (let loop ((index 0))
+      (unless (= index n)
+        (bytevector-u8-set! sub (+ (- 8 n) index) (bytevector-u8-ref bv (+ position 1 index)))
+        (loop (+ index 1))))
+    (values (- (struct:unpack>Q sub) maxv) (+ position 1 n))))
+
+(define (unpack-bigish-positive-integer bv code position)
+  (let ((length (bytevector-u8-ref bv (+ position 1))))
+    (values (let loop ((range (iota length))
+                       (out 0))
+              (if (null? range)
+                  out
+                  (loop (cdr range) (+ (arithmetic-shift out 8)
+                                       (bytevector-u8-ref bv (+ position 2 (car range)))))))
+            (+ position 2 length))))
+
+(define (unpack-bigish-negative-integer bv code position)
+  (let ((length (bitwise-xor (bytevector-u8-ref bv (+ position 1)) #xFF)))
+    (values (let loop ((range (iota length))
+                       (out 0))
+              (if (null? range)
+                  (+ (- out (arithmetic-shift 1 (* length 8))) 1)
+                  (loop (cdr range) (+ (arithmetic-shift out 8)
+                                       (bytevector-u8-ref bv (+ position 2 (car range)))))))
+            (+ position 2 length))))
+
+(define (unpack bv)
+  (let loop ((position 0)
+             (out '()))
+    (if (= position (bytevector-length bv))
+        (reverse! out)
+        (let ((code (bytevector-u8-ref bv position)))
+          (cond
+           ;; null, true, false and zero
+           ((= code *null-code*) (loop (+ position 1) (cons *null* out)))
+           ((= code *true-code*) (loop (+ position 1) (cons #t out)))
+           ((= code *false-code*) (loop (+ position 1) (cons #f out)))
+           ((= code *int-zero-code*) (loop (+ position 1) (cons 0 out)))
+           ;; variable length
+           ((= code *bytes-code*)
+            (call-with-values (lambda () (unpack-bytes bv (+ position 1)))
+              (lambda (value position) (loop position (cons value out)))))
+           ((= code *string-code*)
+            (call-with-values (lambda () (unpack-bytes bv (+ position 1)))
+              (lambda (value position) (loop position (cons (utf8->string value) out)))))
+           ((= code *symbol-code*)
+            (call-with-values (lambda () (unpack-bytes bv (+ position 1)))
+              (lambda (value position) (loop position (cons (string->symbol (utf8->string value)) out)))))
+           ;; integers
+           ((and (> code *int-zero-code*) (< code *pos-int-end*))
+            (call-with-values (lambda () (unpack-positive-integer bv code position))
+              (lambda (value position) (loop position (cons value out)))))
+           ((and (> code *neg-int-start*) (< code *int-zero-code*))
+            (call-with-values (lambda () (unpack-negative-integer bv code position))
+              (lambda (value position) (loop position (cons value out)))))
+           ((= code *pos-int-end*)
+            (call-with-values (lambda () (unpack-bigish-positive-integer bv code position))
+              (lambda (value position) (loop position (cons value out)))))
+           ((= code *neg-int-start*)
+            (call-with-values (lambda () (unpack-bigish-negative-integer bv code position))
+              (lambda (value position) (loop position (cons value out)))))
+           ;; oops
+           (else (error 'unpack "unsupported code" code)))))))
+
+;;; Commentary
+;;
+;; SRFI-168: nstore
+;;
+
+;; helpers
+
+(define (permutations s)
+  ;; http://rosettacode.org/wiki/Permutations#Scheme
+  (cond
+   ((null? s) '(()))
+   ((null? (cdr s)) (list s))
+   (else ;; extract each item in list in turn and permutations the rest
+    (let splice ((l '()) (m (car s)) (r (cdr s)))
+      (append
+       (map (lambda (x) (cons m x)) (permutations (append l r)))
+       (if (null? r) '()
+           (splice (cons m l) (car r) (cdr r))))))))
+
+(define (combination k lst)
+  (cond
+   ((= k 0) '(()))
+   ((null? lst) '())
+   (else
+    (let ((head (car lst))
+          (tail (cdr lst)))
+      (append (map (lambda (y) (cons head y)) (combination (- k 1) tail))
+              (combination k tail))))))
+
+(define (combinations lst)
+  (if (null? lst) '(())
+      (let* ((head (car lst))
+             (tail (cdr lst))
+             (s (combinations tail))
+             (v (map (lambda (x) (cons head x)) s)))
+        (append s v))))
+
+;; make-indices will compute the minimum number of indices/tables
+;; required to bind any pattern in one hop. The math behind this
+;; computation is explained at:
+;;
+;;   https://math.stackexchange.com/q/3146568/23663
+;;
+;; make-indices will return the minimum list of permutations in
+;; lexicographic order of the base index ie. (iota n) where n is
+;; the length of ITEMS ie. the n in nstore.
+
+(define (prefix? lst other)
+  "Return #t if LST is prefix of OTHER"
+  (let loop ((lst lst)
+             (other other))
+    (if (null? lst)
+        #t
+        (if (= (car lst) (car other))
+            (loop (cdr lst) (cdr other))
+            #f))))
+
+(define (permutation-prefix? c o)
+  (any (lambda (p) (prefix? p o)) (permutations c)))
+
+(define (ok? combinations candidate)
+  (every (lambda (c) (any (lambda (p) (permutation-prefix? c p)) candidate)) combinations))
+
+(define (findij L)
+  (let loop3 ((x L)
+              (y '()))
+    (if (or (null? x) (null? (cdr x)))
+        (values #f (append (reverse! y) x) #f #f)
+        (if (and (not (cdr (list-ref x 0))) (cdr (list-ref x 1)))
+            (values #t
+                    (append (cddr x) (reverse! y))
+                    (car (list-ref x 0))
+                    (car (list-ref x 1)))
+            (loop3 (cdr x) (cons (car x) y))))))
+
+(define (lex< a b)
+  (let loop ((a a)
+             (b b))
+    (if (null? a)
+        #t
+        (if (not (= (car a) (car b)))
+            (< (car a) (car b))
+            (loop (cdr a) (cdr b))))))
+
+(define (make-indices n)
+  ;; This is based on:
+  ;;
+  ;;   https://math.stackexchange.com/a/3146793/23663
+  ;;
+  (let* ((tab (iota n))
+         (cx (combination (floor (/ n 2)) tab)))
+    (let loop1 ((cx cx)
+                (out '()))
+      (if (null? cx)
+          (begin (assume (ok? (combinations tab) out))
+                 (sort! lex< out))
+          (let loop2 ((L (map (lambda (i) (cons i (not (not (memv i (car cx)))))) tab))
+                      (a '())
+                      (b '()))
+            (call-with-values (lambda () (findij L))
+              (lambda (continue? L i j)
+                (if continue?
+                    (loop2 L (cons j a) (cons i b))
+                    (loop1 (cdr cx)
+                           (cons (append (reverse! a) (map car L) (reverse! b))
+                                 out))))))))))
+
+(define-record-type <engine>
+  (nstore-engine ref set! delete! prefix)
+  engine?
+  (ref engine-ref)
+  (set! engine-set!)
+  (delete! engine-delete!)
+  (prefix engine-prefix))
+
+(define-record-type <nstore>
+  (make-nstore engine prefix prefix-length indices n)
+  nstore?
+  (engine nstore-engine-ref)
+  (prefix nstore-prefix)
+  (prefix-length nstore-prefix-length)
+  (indices nstore-indices)
+  (n nstore-n))
+
+(define (nstore engine prefix items)
+  (make-nstore engine prefix (length prefix) (make-indices (length items)) (length items)))
+
+(define nstore-ask?
+  (lambda (transaction nstore items)
+    (assume (= (length items) (nstore-n nstore)))
+    ;; indices are sorted in lexicographic order, that is the first
+    ;; index is always (iota n) also known as the base index. So that
+    ;; there is no need to permute ITEMS.  zero in the following
+    ;; cons* is the index of the base index in nstore-indices
+    (let ((key (apply pack (append (nstore-prefix nstore) (list 0) items))))
+      (not (not ((engine-ref (nstore-engine-ref nstore)) transaction key))))))
+
+(define true (pack #t))
+
+(define (make-tuple list permutation)
+  ;; Construct a permutation of LIST based on PERMUTATION
+  (let ((tuple (make-vector (length permutation))))
+    (for-each (lambda (index value) (vector-set! tuple index value)) permutation list)
+    (vector->list tuple)))
+
+(define (permute items index)
+  ;; make-tuple reverse operation
+  (let ((items (list->vector items)))
+    (let loop ((index index)
+               (out '()))
+      (if (null? index)
+          (reverse! out)
+          (loop (cdr index)
+                (cons (vector-ref items (car index)) out))))))
+
+(define nstore-add!
+  (lambda (transaction nstore items)
+    (assume (= (length items) (nstore-n nstore)))
+    (let ((engine (nstore-engine-ref nstore))
+          (nstore-prefix (nstore-prefix nstore)))
+      ;; add ITEMS into the okvs and prefix each of the permutation
+      ;; of ITEMS with the nstore-prefix and the index of the
+      ;; permutation inside the list INDICES called SUBSPACE.
+      (let loop ((indices (nstore-indices nstore))
+                 (subspace 0))
+        (unless (null? indices)
+          (let ((key (apply pack (append nstore-prefix
+                                         (list subspace)
+                                         (permute items (car indices))))))
+            ((engine-set! engine) transaction key true)
+            (loop (cdr indices) (+ 1 subspace))))))))
+
+(define nstore-delete!
+  (lambda (transaction nstore items)
+    (assume (= (length items) (nstore-n nstore)))
+    (let ((engine (nstore-engine-ref nstore))
+          (nstore-prefix (nstore-prefix nstore)))
+      ;; Similar to the above but remove ITEMS
+      (let loop ((indices (nstore-indices nstore))
+                 (subspace 0))
+        (unless (null? indices)
+          (let ((key (apply pack (append nstore-prefix
+                                         (list subspace)
+                                         (permute items (car indices))))))
+            ((engine-delete! engine) transaction key)
+            (loop (cdr indices) (+ subspace 1))))))))
+
+(define-record-type <nstore-var>
+  (nstore-var name)
+  nstore-var?
+  (name nstore-var-name))
+
+(define (bind* pattern tuple seed)
+  ;; associate variables of PATTERN to value of TUPLE with SEED.
+  (let loop ((tuple tuple)
+             (pattern pattern)
+             (out seed))
+    (if (null? tuple)
+        out
+        (if (nstore-var? (car pattern)) ;; only bind variables
+            (loop (cdr tuple)
+                  (cdr pattern)
+                  (hashmap-set out
+                               (nstore-var-name (car pattern))
+                               (car tuple)))
+            (loop (cdr tuple) (cdr pattern) out)))))
+
+(define (pattern->combination pattern)
+  (let loop ((pattern pattern)
+             (index 0)
+             (out '()))
+    (if (null? pattern)
+        (reverse! out)
+        (loop (cdr pattern)
+              (+ 1 index)
+              (if (nstore-var? (car pattern))
+                  out
+                  (cons index out))))))
+
+(define (pattern->index pattern indices)
+  ;; Retrieve the index that will allow to bind pattern in one
+  ;; hop. This is done by getting all non-variable items of the
+  ;; pattern and looking up the first index that is
+  ;; permutation-prefix
+  (let ((combination (pattern->combination pattern)))
+    (let loop ((indices indices)
+               (subspace 0))
+      (if (null? indices)
+          (error 'nstore "oops!")
+          (if (permutation-prefix? combination (car indices))
+              (values (car indices) subspace)
+              (loop (cdr indices) (+ subspace 1)))))))
+
+(define (pattern->prefix pattern index)
+  ;; Return the list that correspond to INDEX, that is the items
+  ;; of PATTERN that are not variables. This is used as the prefix
+  ;; for the range query done later.
+  (let loop ((index index)
+             (out '()))
+    (let ((v (list-ref pattern (car index))))
+      (if (nstore-var? v)
+          (reverse! out)
+          (loop (cdr index) (cons v out))))))
+
+(define (%from transaction nstore pattern seed config)
+  (call-with-values (lambda () (pattern->index pattern (nstore-indices nstore)))
+    (lambda (index subspace)
+      (let ((prefix (append (nstore-prefix nstore)
+                            (list subspace)
+                            (pattern->prefix pattern index)))
+            (engine (nstore-engine-ref nstore)))
+        (gmap (lambda (pair)
+                (bind* pattern
+                       (make-tuple (drop (unpack (car pair))
+                                         (+ (nstore-prefix-length nstore) 1))
+                                   index)
+                       seed))
+              ((engine-prefix engine) transaction (apply pack prefix) config))))))
+
+(define nstore-from
+  (case-lambda
+    ((transaction nstore pattern)
+     (assume (= (length pattern) (nstore-n nstore)))
+     (%from transaction nstore pattern (hashmap (make-eq-comparator)) '()))
+    ((transaction nstore pattern config)
+     (assume (= (length pattern) (nstore-n nstore)))
+     (%from transaction nstore pattern (hashmap (make-eq-comparator)) config))))
+
+(define (pattern-bind pattern seed)
+  ;; Return a pattern where variables that have a binding in seed
+  ;; are replaced with the associated value. In pratice, most of
+  ;; the time, it is the same pattern with less variables.
+  (map (lambda (item) (or (and (nstore-var? item)
+                               (hashmap-ref/default seed
+                                                    (nstore-var-name item)
+                                                    #f))
+                          item))
+       pattern))
+
+(define (gscatter generator)
+  ;; Return a generator that yields the elements of the generators
+  ;; produced by the given GENERATOR. Same as gflatten but
+  ;; GENERATOR contains other generators instead of lists.
+  (let ((state eof-object))
+    (lambda ()
+      (let ((value (state)))
+        (if (eof-object? value)
+            (let loop ((new (generator)))
+              (if (eof-object? new)
+                  new
+                  (let ((value (new)))
+                    (if (eof-object? value)
+                        (loop (generator))
+                        (begin (set! state new)
+                               value)))))
+            value)))))
+
+(define nstore-where
+  (lambda (transaction nstore pattern)
+    (assume (= (length pattern) (nstore-n nstore)))
+    (lambda (from)
+      (gscatter
+       (gmap (lambda (bindings) (%from transaction
+                                       nstore
+                                       (pattern-bind pattern bindings)
+                                       bindings
+                                       '()))
+             from)))))
+
+(define-syntax nstore-query
+  (syntax-rules ()
+    ((_ value) value)
+    ((_ value f rest ...)
+     (nstore-query (f value) rest ...))))
+
+
+;;; Commentary
+;;
+;; something insightful
+;;
 
 (define (make-node tag options children)
   `(@ (tag . ,tag)
