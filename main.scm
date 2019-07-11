@@ -1,9 +1,11 @@
 (import (scheme base))
 (import (scheme char))
+(import (scheme charset))
+(import (scheme cxr))
 (import (scheme eval))
+(import (scheme list))
 (import (scheme read))
 (import (scheme write))
-
 
 (import (chibi emscripten))
 (import (chibi match))
@@ -15,6 +17,13 @@
 (eval-script! "document.resume = Module['resume']")
 
 ;; scheme helpers
+
+(define-syntax define-syntax-rule
+  (syntax-rules ()
+    ((define-syntax-rule (keyword args ...) body)
+     (define-syntax keyword
+       (syntax-rules ()
+         ((keyword args ...) body))))))
 
 (define (scm->string scm)
   (let ((port (open-output-string)))
@@ -79,63 +88,430 @@
        (set! %prompt #f)
        (apply prompt (cons %escape (cons k args)))))))
 
-;; parse json
+
+;;; Commentary:
 ;;
-;; MIT License
+;; arew streams
+
+
+(define (list->stream lst)
+  (let loop ((lst lst))
+    (lambda ()
+      (if (null? lst)
+          (values #f #f)
+          (values (car lst) (loop (cdr lst)))))))
+
+(define (stream->list stream)
+  (let loop ((stream stream)
+             (out '()))
+    (call-with-values stream
+      (lambda (value next)
+        (if next
+            (loop next (cons value out))
+            (reverse out))))))
+
+(define stream-null
+  (lambda ()
+    (values #f #f)))
+
+(define (stream-null? stream)
+  (call-with-values stream
+    (lambda (_ next?)
+      (not next?))))
+
+(define (stream-car stream)
+  (call-with-values stream (lambda (item _) item)))
+
+
+;;; Commentary:
 ;;
-;; Copyright (c) 2018 Thunk NYC Corp.
+;; Parser combinators.
 ;;
-;; https://github.com/thunknyc/scm-json/blob/master/LICENSE
+;; TODO: improve error handling
+;; TODO: add compatible pk procedure
+;;
+;; Also see:
+;;
+;; - https://epsil.github.io/gll/
+;; - https://docs.racket-lang.org/parsack/index.html
+;; - https://docs.racket-lang.org/megaparsack/
+;; - https://git.dthompson.us/guile-parser-combinators.git
+;; - https://gitlab.com/tampe/stis-parser
+;;
+;;; Code:
+
+(define-record-type <result>
+  (make-result value stream)
+  result?
+  (value result-value)
+  (stream result-stream))
+
+(define-record-type <failure>
+  (make-failure value parser args)
+  failure?
+  (value failure-value)
+  (parser failure-parser)
+  (args failure-args))
+
+(define continue make-result)
+
+(define (fail value parser . args)
+  (make-failure value parser args))
+
+(define-record-type <xchar>
+  ;; extended char with line, column and offset information
+  (make-xchar char line column offset)
+  xchar?
+  (char xchar-char)
+  (line xchar-line)
+  (column xchar-column)
+  (offset xchar-offset))
+
+(define (make-pseudo-xchar char)
+  (make-xchar char #f #f #f))
+
+(define (parse-lift proc parser)
+  "Apply PROC to the result of PARSER"
+  (lambda (stream)
+    (let ((out (parser stream)))
+      (if (failure? out)
+          out
+          (continue (proc (result-value out)) (result-stream out))))))
+
+(define (string->stream string)
+  ;; TODO: optimize
+  (let loop ((chars (string->list string))
+             (line 1)
+             (column 1)
+             (offset 0)
+             (out '()))
+    (if (null? chars)
+        (list->stream (reverse out))
+        (if (eq? (car chars) #\newline)
+            (loop (cdr chars)
+                  (+ 1 line)
+                  1
+                  (+ 1 offset)
+                  (cons (make-xchar #\newline line column offset) out))
+            (loop (cdr chars)
+                  line
+                  (+ 1 column)
+                  (+ 1 offset)
+                  (cons (make-xchar (car chars) line column offset) out))))))
+
+(define (parse parser stream)
+  (let ((out (parser stream)))
+    (if (failure? out)
+        (error 'combinatorix "parse failed" out)
+        (if (stream-null? (result-stream out))
+            (result-value out)
+            (error 'combinatorix
+                   "stream was not fully consumed"
+                   (stream-car (result-stream out)))))))
+
+(define (parse-char char)
+  (lambda (stream)
+    (call-with-values stream
+      (lambda (value next)
+        (if next
+            (if (char=? value char)
+                (continue value next)
+                (fail value parse-char char))
+            (fail (eof-object) parse-char char))))))
+
+(define (parse-xchar char)
+  (lambda (stream)
+    (call-with-values stream
+      (lambda (value next)
+        (if next
+            (if (char=? (xchar-char value) char)
+                (continue value next)
+                (fail value parse-xchar char))
+            (fail (eof-object) parse-xchar char))))))
+
+(define (%either . args)
+  (lambda (stream)
+    (let loop ((parsers args))
+      (if (null? parsers)
+          (apply fail (stream-car stream) %either args)
+          (let ((out (((car parsers)) stream)))
+            (if (failure? out)
+                (loop (cdr parsers))
+                out))))))
+
+(define-syntax-rule (parse-either parser ...)
+  (%either (lambda () parser) ...))
+
+(define (%each . args)
+  (lambda (stream)
+    (let loop ((parsers args)
+               (stream stream)
+               (out '()))
+      (if (null? parsers)
+          (continue (reverse out) stream)
+          (let ((out* (((car parsers)) stream)))
+            (if (failure? out*)
+                out*
+                (loop (cdr parsers)
+                      (result-stream out*)
+                      (cons (result-value out*) out))))))))
+
+(define-syntax-rule (parse-each parser ...)
+  (%each (lambda () parser) ...))
+
+(define (parse-zero-or-more parser)
+  (lambda (stream)
+    (let loop ((stream stream)
+               (out '()))
+      (let ((out* (parser stream)))
+        (if (failure? out*)
+            (continue (reverse out) stream)
+            (loop (result-stream out*) (cons (result-value out*) out)))))))
+
+(define (parse-one-or-more parser)
+  (parse-lift (lambda (x) (apply cons x)) (parse-each parser (parse-zero-or-more parser))))
+
+(define (parse-when predicate? parser)
+  (lambda (stream)
+    (call-with-values stream
+      (lambda (value next)
+        (if next
+            (if (predicate? value)
+                (parser stream)
+                (fail value parse-when predicate?))
+            (fail (eof-object) parse-when predicate?))))))
+
+(define (parse-when* parser other)
+  ;; more general than parse-when
+  (lambda (stream)
+    (let ((out (parser stream)))
+      (if (failure? out)
+          out
+          (other stream)))))
+
+(define (parse-unless predicate? parser)
+  (parse-when (lambda (value) (not (predicate? value))) parser))
+
+(define (parse-unless* parser other)
+  ;; more general than parse-unless
+  (lambda (stream)
+    (let ((out (parser stream)))
+      (if (failure? out)
+          (other stream)
+          (fail (stream-car stream) parse-unless* parser other)))))
+
+(define (parse-only predicate? parser)
+  ;; PARSER succeed only if its results passed to PREDICATE? return
+  ;; true.
+  (lambda (stream)
+    (let ((out (parser stream)))
+      (if (failure? out)
+          out
+          (if (predicate? (result-value out))
+              out
+              (fail (stream-car stream) parse-only predicate? parser))))))
+
+(define (parse-char-set char-set)
+  (lambda (stream)
+    (call-with-values stream
+      (lambda (value next)
+        (if next
+            (if (char-set-contains? char-set (xchar-char value))
+                (continue value next)
+                (fail value parse-char-set char-set))
+            (fail (eof-object) parse-char-set char-set))))))
+
+(define parse-any
+  (lambda (stream)
+    (call-with-values stream
+      (lambda (value next)
+        (if next
+            (continue value next)
+            (fail (eof-object) parse-any #f))))))
+
+(define (parse-return value)
+  (lambda (stream)
+    (continue value stream)))
+
+(define (parse-maybe parser)
+  (parse-either parser (parse-return #f)))
+
+(define (parse-string string)
+  (apply %each (map (lambda (char) (lambda () (parse-xchar char))) (string->list string))))
+
+
+;;; Commentary:
+;;
+;; arew json parser
 ;;
 
-(define-grammar json
-  (space ((* ,(parse-char char-whitespace?))))
+(define (const v)
+  (lambda args v))
 
-  ;;> The number parser is currently quite primitive; it reads a
-  ;;> sequence of characters matching [-+0-9eE,.] and attempts to
-  ;;> parse it as a Scheme number.
+(define json-null '(null))
 
-  (number ((-> n (+ (or ,(parse-char char-numeric?)
-                        #\. #\- #\+ #\e #\E)))
-           (string->number (list->string n))))
+(define (json-null? object)
+  (eq? object json-null))
 
-  (string ((: ,(parse-char #\")
-              (-> s (* ,(parse-not-char #\")))
-              ,(parse-char #\"))
-           (list->string s)))
+(define (json->scm string)
+  (parse json (list->stream (parse tokens (string->stream string)))))
 
-  (atom ((-> n ,number) n)
-        ((-> s ,string) s)
-        ("true" #t)
-        ("false" #f))
+(define (->string value)
+  (list->string (map xchar-char value)))
 
-  (datum ((or ,atom ,array ,hash)))
+(define (%parse-escaped input output)
+  (parse-lift (const (make-pseudo-xchar output)) (parse-string input)))
 
-  (array-el ((: "," ,space (-> el ,datum)) el))
+(define parse-escaped
+  (parse-either (%parse-escaped "\\\"" #\")
+                (%parse-escaped "\\\\" #\\)
+                (%parse-escaped "\\/" #\/)
+                (%parse-escaped "\\b" #\backspace)
+                ;; (%parse-escaped "\\f" #\formfeed) ;; TODO: FIXME
+                (%parse-escaped "\\n" #\newline)
+                (%parse-escaped "\\r" #\return)
+                (%parse-escaped "\\t" #\tab)
+                ;; %parse-unicode
+                ))
 
-  (array ((: "[" ,space (-> el ,datum) ,space
-             (-> els (* ,array-el)) ,space "]")
-          (apply vector el els))
-         ((: "[" ,space "]") (vector)))
+(define parse-string-token
+  (parse-lift cadr
+              (parse-each (parse-xchar #\")
+                          (parse-lift
+                           ->string
+                           (parse-zero-or-more
+                            (parse-unless
+                             (lambda (v) (char=? #\" (xchar-char v)))
+                             (parse-either parse-escaped
+                                           parse-any))))
+                          (parse-xchar #\"))))
 
-  (hash-el ((: "," ,space (-> k ,string) ,space
-               ":" ,space (-> v ,datum)) (cons (string->symbol k) v)))
+(define %parse-integer
+  (parse-lift ->string
+              (parse-one-or-more
+               (parse-char-set char-set:digit))))
 
-  (hash ((: "{" ,space (-> k ,string) ,space
-            ":" ,space (-> v ,datum) ,space
-            (-> els (* ,hash-el)) ,space "}")
-         (apply list (cons (string->symbol k) v) els))
-        ((: "{" ,space "}") '()))
+(define %parse-float
+  (parse-lift (lambda (args) (apply string-append args))
+              (parse-each
+               %parse-integer
+               (parse-lift (const ".") (parse-xchar #\.))
+               %parse-integer)))
 
-  (object ((: ,space (-> o ,datum) ,space) o)))
+(define parse-number-token
+  (parse-lift string->number
+              (parse-either %parse-float
+                            %parse-integer)))
 
-;;> Call the JSON parser on the \scheme{(chibi parse)} parse stream
-;;> \var{source}, at index \var{index}, and return the result, or
-;;> \scheme{#f} if parsing fails.
+(define parse-number-special-token ;; TODO: give its proper name
+  (parse-lift (lambda (x) (string->number (apply string-append x)))
+              (parse-each
+               (parse-lift
+                number->string ;; oops!
+                (parse-either parse-number-token
+                              parse-negative-number-token))
+               (parse-lift (lambda (v) (list->string (list (xchar-char v))))
+                           (parse-either (parse-xchar #\e)
+                                         (parse-xchar #\E)))
+               (parse-either %parse-integer
+                             (parse-lift (lambda (x) (string-append "-" (cadr x)))
+                                         (parse-each (parse-xchar #\-)
+                                                     %parse-integer))))))
 
-(define (json->sexp source . o)
-  (let ((index (if (pair? o) (car o) 0)))
-    (parse object source index)))
+(define parse-negative-number-token
+  (parse-lift (lambda (x) (- (cadr x)))
+              (parse-each (parse-xchar #\-)
+                          parse-number-token)))
+
+(define parse-true-token (parse-lift (const #t) (parse-string "true")))
+(define parse-false-token (parse-lift (const #f) (parse-string "false")))
+(define parse-null-token (parse-lift (const json-null) (parse-string "null")))
+
+(define (parse-control-token char symbol)
+  (parse-lift (const symbol) (parse-xchar char)))
+
+(define (cleanup lst)
+  (filter (lambda (x) (not (null? x))) lst))
+
+(define tokens
+  ;; parse character stream into tokens ignoring whitespace between tokens
+  (parse-lift
+   cleanup
+   (parse-one-or-more
+    (parse-either parse-string-token
+                  parse-number-special-token
+                  parse-number-token
+                  parse-negative-number-token
+                  parse-true-token
+                  parse-false-token
+                  parse-null-token
+                  (parse-control-token #\, 'comma)
+                  (parse-control-token #\: 'colon)
+                  (parse-control-token #\{ 'brace-open)
+                  (parse-control-token #\} 'brace-close)
+                  (parse-control-token #\[ 'bracket-open)
+                  (parse-control-token #\] 'bracket-close)
+                  (parse-lift (const '()) (parse-char-set char-set:whitespace))))))
+
+(define parse-json-string (parse-when string? parse-any))
+
+(define parse-number (parse-when number? parse-any))
+
+(define (parse-symbol symbol)
+  (parse-when (lambda (x) (eq? x symbol)) parse-any))
+
+(define %parse-object-item
+  (parse-lift (lambda (v) (cons (string->symbol (car v)) (caddr v)))
+              (parse-each parse-json-string
+                          (parse-symbol 'colon)
+                          json)))
+
+(define parse-object
+  (parse-either
+   (parse-lift (const '())
+               (parse-each (parse-symbol 'brace-open)
+                           (parse-symbol 'brace-close)))
+   (parse-lift (lambda (x) (append '() (cadr x) (list (caddr x))))
+               (parse-each
+                (parse-symbol 'brace-open)
+                (parse-zero-or-more (parse-lift car
+                                                (parse-each %parse-object-item
+                                                            (parse-symbol 'comma))))
+                %parse-object-item
+                (parse-symbol 'brace-close)))))
+
+(define parse-array
+  (parse-either
+   (parse-lift (const '())
+               (parse-each (parse-symbol 'bracket-open)
+                           (parse-symbol 'bracket-close)))
+   (parse-lift (lambda (x) (append (cadr x) (list (caddr x))))
+               (parse-each
+                (parse-symbol 'bracket-open)
+                (parse-zero-or-more (parse-lift car
+                                                (parse-each json
+                                                            (parse-symbol 'comma))))
+                json
+                (parse-symbol 'bracket-close)))))
+
+(define parse-true (parse-when (lambda (x) (eq? x #t)) parse-any))
+
+(define parse-false (parse-when (lambda (x) (eq? x #f)) parse-any))
+
+(define parse-null (parse-when (lambda (x) (json-null? x)) parse-any))
+
+(define json
+  (parse-either parse-json-string
+                parse-number
+                parse-object
+                parse-array
+                parse-true
+                parse-false
+                parse-null
+                ))
+
+
+(define json->sexp json->scm)
 
 ;;
 ;; render json
@@ -165,6 +541,16 @@
         (loop (string-append out (sexp->json (car sexp)) ",")
               (cdr sexp)))))
 
+(define (scheme-string->json-string string)
+  ;; TODO: handle other escape sequence like \t
+  (let loop ((chars (string->list string))
+             (out '()))
+    (if (null? chars)
+        (list->string (reverse out))
+        (if (char=? (car chars) #\newline)
+            (loop (cdr chars) (cons #\n (cons #\\ out)))
+            (loop (cdr chars) (cons (car chars) out))))))
+
 (define (sexp->json sexp)
   (match sexp
     (#f "false")
@@ -174,7 +560,7 @@
     ((? pair? sexp) (list->json sexp))
     ((? symbol? sexp) (string-append "\"" (symbol->string sexp) "\""))
     ((? number? sexp) (number->string sexp))
-    ((? string? sexp) (string-append "\"" sexp "\""))))
+    ((? string? sexp) (string-append "\"" (scheme-string->json-string sexp) "\""))))
 
 (define (make-node tag options children)
   `(@ (tag . ,tag)
@@ -310,16 +696,16 @@
         (let loop2 ((event (recv-from-javascript))
                     (k #f))
           (cond
-           ((and (string=? (vector-ref event 0) "xhr") k)
-            (k (vector-ref event 1)))
-           ((and (string=? (vector-ref event 0) "xhr") (not k))
+           ((and (string=? (car event) "xhr") k)
+            (k (cadr event)))
+           ((and (string=? (car event) "xhr") (not k))
             (error "Oops! Should not happen"))
-           ((string=? (vector-ref event 0) "event")
+           ((string=? (car event) "event")
             (when k
               (pk "User, your wish is my command!..."))
             (call-with-prompt
              (lambda ()
-               (let ((new-model (update model callbacks (vector-ref event 1))))
+               (let ((new-model (update model callbacks (cadr event))))
                  (set! model new-model)
                  (loop1)))
              (lambda (k obj)
