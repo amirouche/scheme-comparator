@@ -1318,36 +1318,10 @@
     ((_ value f rest ...)
      (nstore-query (f value) rest ...))))
 
-
 ;;; Commentary
 ;;
 ;; TODO: add something insightful
 ;;
-
-(define triplestore
-  (let ((engine (nstore-engine okvs-ref okvs-set! okvs-delete! okvs-prefix)))
-    (nstore engine '() '(uid key value))))
-
-(define database (okvs #t))
-
-;; ask
-(pk (okvs-in-transaction
-     database
-     (lambda (transaction)
-       (nstore-ask? transaction triplestore '("P4X432" blog/title "hyper.dev")))))
-
-;; add
-(okvs-in-transaction
- database
- (lambda (transaction)
-   (nstore-add! transaction triplestore '("P4X432" blog/title "hyper.dev"))))
-
-;; ask
-(pk (okvs-in-transaction
-     database
-     (lambda (transaction)
-       (nstore-ask? transaction triplestore '("P4X432" blog/title "hyper.dev")))))
-
 
 (define (make-node tag options children)
   `(@ (tag . ,tag)
@@ -1453,6 +1427,8 @@
 (define (merge first second . other)
   (%merge first (cons second other)))
 
+;; inbox handling
+
 (define (recv-from-javascript)
   (json->sexp (string-eval-script "document.scheme_inbox")))
 
@@ -1502,88 +1478,45 @@
 
 ;; app
 
+(define triplestore
+  (let ((engine (nstore-engine okvs-ref okvs-set! okvs-delete! okvs-prefix)))
+    (nstore engine '() '(uid key value))))
+
 (define (eval-string string)
   (eval (string->scm string) (environment '(scheme base))))
 
 (define (init)
-  '((index . 0)
-    (input . "")
-    (convo . ())))
+  (let ((model (okvs 'in-memory)))
+    (okvs-in-transaction
+     model
+     (lambda (txn) (nstore-add! txn triplestore (list 'count 'count 0))))
+    model))
 
-(define intro "Learning a new language is long adventure of correct and wrong.  Here through this interface that mimics an REPL you will learn Scheme programming language.")
-
-(define exercices
-  '(("What is (+ 41 1)" . 42)
-    ("What is (+ 1 99 1)" . 101)
-    ("What is (* 2 3 4)" . 24)
-    ("What is (+ (* 100 10) 330 7)" . 1337)
-    ("Err!!!..." '(please-fix-the-bug))))
-
-(define (make-stdout string)
-  `(div (@ (className "stdout")) ,(string-append ";; " string)))
-
-(define (make-stdin string)
-  `(div (@ (className "stdin")) ,string))
-
-(define (onChange model event)
-  (let ((input (ref (ref event 'event) 'target.value)))
-    (set model 'input input)))
-
-(define (clear-input model)
-  (set model 'input ""))
-
-(define (next-exercice model)
-  (let* ((input (ref model 'input))
-         (convo (ref model 'convo))
-         (index (ref model 'index))
-         (exercice (car (list-ref exercices index))))
-    (let ((new (append convo (list (list exercice input "Ok!")))))
-      (clear-input (set (set model 'convo new) 'index (+ 1 index))))))
-
-(define (retry-exercice model)
-  (let* ((input (ref model 'input))
-         (convo (ref model 'convo))
-         (index (ref model 'index))
-         (exercice (car (list-ref exercices index))))
-    (let ((new (append convo (list (list exercice input "Wrong?!")))))
-      (clear-input (set model 'convo new)))))
-
-(define (onSubmit model event)
-  (pk "proof xhr GET foo.json works!" (xhr "GET" "foo.json" '()))
-  (call/cc
-   (lambda (k)
-     (with-exception-handler
-      (lambda _
-        (k (retry-exercice model)))
-      (lambda ()
-        (let ((out (eval-string (ref model 'input))))
-          (if (equal? out (cdr (list-ref exercices (ref model 'index))))
-              (next-exercice model)
-              (retry-exercice model))))))))
-
-
-(define input-style '((marginTop . "15px")))
+(define (onClick model event)
+  (okvs-in-transaction
+   model
+   (lambda (txn)
+     (let* ((count ((nstore-from txn triplestore
+                                 (list 'count 'count (nstore-var 'count)))))
+            (count (hashmap-ref count 'count)))
+       (nstore-delete! txn triplestore
+                       (list 'count 'count count))
+       (nstore-add! txn triplestore
+                    (list 'count 'count (+ count 1))))))
+  model)
 
 (define (view model)
-  `(div
-    ,(make-stdout intro)
-    ,@(let loop ((convo (ref model 'convo))
-                 (out '()))
-        (match convo
-          ('() out)
-          (((exercice input response) rest ...)
-           (loop rest
-                 (append out (list (make-stdout exercice)
-                                   (make-stdin input)
-                                   (make-stdout response)))))))
-    ,(make-stdout (car (list-ref exercices (ref model 'index))))
-    (form (@ (onSubmit ,onSubmit))
-          (input (@ (id "input")
-                    (style ,(make-style input-style))
-                    (autoFocus #t)
-                    (type "text")
-                    (value ,(ref model 'input))
-                    (onChange ,onChange))))))
+  (let ((count
+         (okvs-in-transaction
+          model
+          (lambda (txn)
+            (let* ((count ((nstore-from txn triplestore
+                                        (list 'count 'count (nstore-var 'count)))))
+                   (count (hashmap-ref count 'count)))
+              count)))))
+    `(div (@ (className "stdin"))
+      (h1 ,(number->string count))
+      (button (@ (onClick ,onClick)) "increment"))))
 
 (create-app init view)
 
