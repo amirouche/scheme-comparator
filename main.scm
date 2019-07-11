@@ -29,13 +29,13 @@
 ;; (scheme bytevector) shims that are (as of yet) missing from chibi
 
 (define (bytevector=? bv other)
-  (if (not (bytevector-length bv) (bytevector-length other))
+  (if (not (= (bytevector-length bv) (bytevector-length other)))
       #f
       (let loop ((index 0))
         (if (zero? (- (bytevector-length bv) index))
             #t
-            (if (not (bytevector-u8-ref bv index)
-                     (bytevector-u8-ref other index))
+            (if (not (= (bytevector-u8-ref bv index)
+                        (bytevector-u8-ref other index)))
                 #f
                 (loop (+ index 1)))))))
 
@@ -1321,8 +1321,33 @@
 
 ;;; Commentary
 ;;
-;; something insightful
+;; TODO: add something insightful
 ;;
+
+(define triplestore
+  (let ((engine (nstore-engine okvs-ref okvs-set! okvs-delete! okvs-prefix)))
+    (nstore engine '() '(uid key value))))
+
+(define database (okvs #t))
+
+;; ask
+(pk (okvs-in-transaction
+     database
+     (lambda (transaction)
+       (nstore-ask? transaction triplestore '("P4X432" blog/title "hyper.dev")))))
+
+;; add
+(okvs-in-transaction
+ database
+ (lambda (transaction)
+   (nstore-add! transaction triplestore '("P4X432" blog/title "hyper.dev"))))
+
+;; ask
+(pk (okvs-in-transaction
+     database
+     (lambda (transaction)
+       (nstore-ask? transaction triplestore '("P4X432" blog/title "hyper.dev")))))
+
 
 (define (make-node tag options children)
   `(@ (tag . ,tag)
