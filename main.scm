@@ -376,7 +376,7 @@
       (clear-input (set model 'convo new)))))
 
 (define (onSubmit model event)
-  (pk "proof xhr GET foo.json works!" (xhr "GET" "/foo.json" '()))
+  (pk "proof xhr GET foo.json works!" (xhr "GET" "foo.json" '()))
   (call/cc
    (lambda (k)
      (with-exception-handler
