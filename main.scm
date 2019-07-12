@@ -1514,7 +1514,7 @@
                                         (list 'count 'count (nstore-var 'count)))))
                    (count (hashmap-ref count 'count)))
               count)))))
-    `(div (@ (className "stdin"))
+    `(div (@ (id "box"))
       (h1 ,(number->string count))
       (button (@ (onClick ,onClick)) "increment"))))
 

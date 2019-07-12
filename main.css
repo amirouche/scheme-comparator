@@ -10,8 +10,9 @@
     box-sizing: border-box;
 }
 
-.stdin {
+#noscript {
     background: hsla(0, 0%, 0%, 0.9);
+    box-sizing: border-box;
     border-radius: 5px;
     box-shadow: 0px 0px 5px black;
     color: #777;
@@ -19,10 +20,26 @@
     margin-bottom: 10px;
     padding: 5px 10px;
     text-align: center;
+    animation: border 2s 1s infinite, borderColor 2s 1s infinite;
 }
 
-#loading {
+#box, #loading {
     display: none;
+    box-sizing: border-box;
+    background: hsla(0, 0%, 0%, 0.9);
+    border-radius: 5px;
+    border: 2px solid #f45e61;
+    color: #777;
+    font-family: mono, monospace;
+    margin-bottom: 10px;
+    padding: 5px 10px;
+    text-align: center;
+}
+
+#box {
+    display: block;
+    border: 0px solid #f45e61;
+    padding: 15px;
 }
 
 #xhr {
