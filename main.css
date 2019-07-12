@@ -111,6 +111,7 @@
 
 
 body {
+    background-color: black;
     background: url("static/billy-huynh-278252-unsplash-small.jpg") fixed;
     background-size: cover;
     color: white;
