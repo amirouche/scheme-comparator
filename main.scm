@@ -1435,8 +1435,8 @@
 (define (send-to-javascript! obj)
   (eval-script! (string-append "document.javascript_inbox = " (sexp->json obj) ";")))
 
-(define (render! model)
-  (let ((sxml (view model)))
+(define (render! txn)
+  (let ((sxml (view txn)))
     (call-with-values (lambda () (sxml->hyperscript+callbacks sxml))
       (lambda (hyperscript callbacks)
         (send-to-javascript! (list "patch" hyperscript))
@@ -1449,12 +1449,14 @@
   (let* ((event* event)
          (identifier (ref event* 'identifier)))
     (let ((callback (ref callbacks identifier)))
-      (callback model event*))))
+      (okvs-in-transaction model (lambda (txn) (callback txn event*)))
+      model)))
 
 (define (create-app init view)
-  (let ((model (init)))
+  (let ((model (okvs 'in-memory)))
+    (okvs-in-transaction model (lambda (txn) (init txn)))
     (let loop1 ()
-      (let ((callbacks (render! model)))
+      (let ((callbacks (okvs-in-transaction model (lambda (txn) (render! txn)))))
         (wait-on-event!) ;; yields control back to the browser
         (let loop2 ((event (recv-from-javascript))
                     (k #f))
@@ -1485,35 +1487,22 @@
 (define (eval-string string)
   (eval (string->scm string) (environment '(scheme base))))
 
-(define (init)
-  (let ((model (okvs 'in-memory)))
-    (okvs-in-transaction
-     model
-     (lambda (txn) (nstore-add! txn triplestore (list 'count 'count 0))))
-    model))
+(define (init txn)
+  (nstore-add! txn triplestore (list 'count 'count 0)))
 
-(define (onClick model event)
-  (okvs-in-transaction
-   model
-   (lambda (txn)
-     (let* ((count ((nstore-from txn triplestore
-                                 (list 'count 'count (nstore-var 'count)))))
-            (count (hashmap-ref count 'count)))
-       (nstore-delete! txn triplestore
-                       (list 'count 'count count))
-       (nstore-add! txn triplestore
-                    (list 'count 'count (+ count 1))))))
-  model)
+(define (onClick txn event)
+  (let* ((count ((nstore-from txn triplestore
+                              (list 'count 'count (nstore-var 'count)))))
+         (count (hashmap-ref count 'count)))
+    (nstore-delete! txn triplestore
+                    (list 'count 'count count))
+    (nstore-add! txn triplestore
+                 (list 'count 'count (+ count 1)))))
 
-(define (view model)
-  (let ((count
-         (okvs-in-transaction
-          model
-          (lambda (txn)
-            (let* ((count ((nstore-from txn triplestore
-                                        (list 'count 'count (nstore-var 'count)))))
-                   (count (hashmap-ref count 'count)))
-              count)))))
+(define (view txn)
+  (let* ((count ((nstore-from txn triplestore
+                              (list 'count 'count (nstore-var 'count)))))
+         (count (hashmap-ref count 'count)))
     `(div (@ (id "box"))
       (h1 ,(number->string count))
       (button (@ (onClick ,onClick)) "increment"))))
