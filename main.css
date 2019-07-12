@@ -28,7 +28,6 @@
     box-sizing: border-box;
     background: hsla(0, 0%, 0%, 0.9);
     border-radius: 5px;
-    border: 2px solid #f45e61;
     color: #777;
     font-family: mono, monospace;
     margin-bottom: 10px;
@@ -38,7 +37,7 @@
 
 #box {
     display: block;
-    border: 0px solid #f45e61;
+    border: 2px solid #f45e61;
     padding: 15px;
 }
 
