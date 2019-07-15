@@ -2,7 +2,7 @@ document.querySelector('#noscript').style.display = "none";
 document.querySelector('#loading').style.display = "block";
 
 let ReactDOM = helpers.default.ReactDOM;
-let h = helpers.default.h;
+let hyperscript = helpers.default.h;
 
 let container = document.getElementById('container');
 
@@ -45,20 +45,11 @@ let xhr = function(request) {
 // reactjs integration
 
 let patch = function(json) {
+    /* patch the DOM using `JSON` representation of the new DOM */
     ReactDOM.render(
         translate(json),
         container,
     );
-}
-
-let send = function(event, identifier) {
-    event.preventDefault();
-    var msg = {
-        "identifier": identifier,
-        "event": {'target.value': event.target.value},
-    };
-    document.scheme_inbox = JSON.stringify(["event", msg]);
-    document.resume();
 }
 
 let makeCallback = function(identifier) {
@@ -70,12 +61,22 @@ let makeCallback = function(identifier) {
         // somekind of throttling.
         xhrInProgress = false;
         document.querySelector('#xhr').style.display = "none";
-        return send(event, identifier);
+
+        /* send serialized DOM event as EVENT with IDENTIFIER to Scheme VM */
+        event.preventDefault();
+        var msg = {
+            "identifier": identifier,
+            "event": {'target.value': event.target.value},
+        };
+        document.scheme_inbox = JSON.stringify(["event", msg]);
+        document.resume();
     };
 }
 
-/* Translate json to `vnode` using `h` react helper */
 let translate = function(json) {
+    /* Translate json to `vnode` using `h` react helper */
+
+    /* Create event handlers / callbacks */
     let options = json.options || {};
     for (let key in options) {
         if(key.startsWith('on')) {
@@ -93,23 +94,11 @@ let translate = function(json) {
         }
     });
 
-    return h(json.tag, options, children);
+    return hyperscript(json.tag, options, children);
 }
 
 
-// application
-
-let chibi;
-
-function start(program, args) {
-    return Chibi({
-        print: console.log,
-        printErr: console.error,
-        program: program,
-        arguments: args
-    });
-}
-
+// TODO: DOCUMENT
 function loop () {
     let json = document.javascript_inbox;
     document.javascript_inbox = undefined;
@@ -123,12 +112,24 @@ function loop () {
     window.requestAnimationFrame(loop); // !
 }
 
+// start Chibi Scheme VM with main.scm
+
+let chibi;
+
+function run_chibi(program, args) {
+    return Chibi({
+        print: console.log,
+        printErr: console.error,
+        program: program,
+        arguments: args
+    });
+}
 
 fetch("main.scm").then(function(response) {
     response.text().then(function(main) {
         document.javascript_inbox = undefined;
         window.requestAnimationFrame(loop); // !
         console.log("starting Chibi Scheme...");
-        chibi = start(main, []);
+        chibi = run_chibi(main, []);
     });
 })

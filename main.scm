@@ -107,7 +107,7 @@
      ((equal? (caar alist) key) (cdar alist))
      (else (loop (cdr alist))))))
 
-;; prompt emulated with call/cc
+;; emulate a prompt with call/cc
 
 (define %prompt #f)
 (define %escape (list 'escape))
@@ -1386,8 +1386,13 @@
   (%sxml->hyperscript+callbacks sxml '()))
 
 ;;; style helpers:
-
+;;
 ;; make-style: translate css styles to reactjs styles
+;;
+;; https://css-tricks.com/snippets/css/a-guide-to-flexbox/
+;;
+;; see ./static/normalize.css
+;;
 
 (define (->reactjs symbol)
   (let loop ((chars (string->list (symbol->string symbol)))
@@ -1452,6 +1457,16 @@
       (okvs-in-transaction model (lambda (txn) (callback txn event*)))
       model)))
 
+;; (define (query-routes model)
+;;   (hashmap-ref
+;;    ((nstore-from model triplestore (list 'ff.scm 'routes (nstore-var 'routes))))
+;;    'routes))
+
+;; (define (goto! model . path)
+;;   (let loop ((routes (query-routes model)))
+;;     (if (valid? path routes)
+
+
 (define (create-app init view)
   (let ((model (okvs 'in-memory)))
     (okvs-in-transaction model (lambda (txn) (init txn)))
@@ -1487,25 +1502,248 @@
 (define (eval-string string)
   (eval (string->scm string) (environment '(scheme base))))
 
-(define (init txn)
-  (nstore-add! txn triplestore (list 'count 'count 0)))
 
-(define (onClick txn event)
-  (let* ((count ((nstore-from txn triplestore
-                              (list 'count 'count (nstore-var 'count)))))
-         (count (hashmap-ref count 'count)))
-    (nstore-delete! txn triplestore
-                    (list 'count 'count count))
-    (nstore-add! txn triplestore
-                 (list 'count 'count (+ count 1)))))
+(define data
+  '(("scheme" "is" "programming language")
+    ;; chez data
+    ("chez" "is" "scheme")
+    ("chez" "name" "Chez Scheme")
+    ("chez" "licence" "Apache 2.0")
+    ("chez" "tag line" "The fastest Scheme")
+    ("chez" "description" "Chez Scheme is both a programming language and an implementation of that language, with supporting tools and documentation.
+
+As a superset of the language described in the Revised6 Report on the Algorithmic Language Scheme (R6RS), Chez Scheme supports all standard features of Scheme, including first-class procedures, proper treatment of tail calls, continuations, user-defined records, libraries, exceptions, and hygienic macro expansion.
+
+Chez Scheme also includes extensive support for interfacing with C and other languages, support for multiple threads possibly running on multiple cores, non-blocking I/O, and many other features.")
+    ("chez" "GNU/Linux" #t)
+    ("chez" "Windows" #t)
+    ("chez" "R6RS" #t)
+    ("chez" "R7RS" #f)
+    ;; arew data
+    ("arew" "is" "scheme")
+    ("arew" "name" "Arew Scheme")
+    ("arew" "licence" "AGPLv3")
+    ("arew" "tag line" "The fastest Scheme with R7RS batteries included")
+    ("arew" "description" "Arew Scheme is a Chez Scheme distribution with R7RS libraries.")
+    ("arew" "GNU/Linux" #t)
+    ("arew" "Windows" #f)
+    ("arew" "R6RS" #t)
+    ("arew" "R7RS" #t)))
+
+(define (init txn)
+  (let loop ((data data))
+    (unless (null? data)
+      (nstore-add! txn triplestore (car data))
+      (loop (cdr data))))
+  (nstore-add! txn triplestore (list 'filter 'R7RS #f)))
+
+(define (filter-ref txn name)
+  (hashmap-ref ((nstore-from txn triplestore (list 'filter name (nstore-var 'var)))) 'var))
+
+(define (filter-set! txn name boolean)
+  (nstore-delete! txn triplestore (list 'filter name (filter-ref txn name)))
+  (nstore-add! txn triplestore (list 'filter name boolean)))
+
+(define (filter-toggle txn name)
+  (let ((boolean (filter-ref txn name)))
+    (filter-set! txn name (not boolean))))
+
+(define headers '("name" "licence" "GNU/Linux" "Windows" "R6RS" "R7RS"))
+
+(define (query-schemes txn)
+  (generator-map->list
+   (lambda (x) (hashmap-ref x 'scheme))
+   (nstore-from txn triplestore
+                (list (nstore-var 'scheme) "is" "scheme"))))
+
+(define (table headers rows)
+  `(table
+    (thead
+     (tr
+      ,@(map (lambda (title) `(th ,title)) headers)))
+    (tbody
+     ,@(let loop ((rows rows)
+                  (out '()))
+         (if (null? rows)
+             out
+             (loop (cdr rows)
+                   (cons `(tr ,@(map (lambda (x) `(td ,x)) (car rows))) out)))))))
+
+(define (->ok boolean)
+  (if boolean "ok" "ko"))
+
+
+(define (query-scheme txn scheme)
+  ((nstore-query
+    (nstore-from txn triplestore
+                 (list scheme "name" (nstore-var 'name)))
+    (nstore-where txn triplestore
+                  (list scheme "tag line" (nstore-var 'tag-line)))
+    (nstore-where txn triplestore
+                  (list scheme "licence" (nstore-var 'licence)))
+    (nstore-where txn triplestore
+                  (list scheme "GNU/Linux" (nstore-var 'GNU/Linux)))
+    (nstore-where txn triplestore
+                  (list scheme "Windows" (nstore-var 'Windows)))
+    (nstore-where txn triplestore
+                  (list scheme "R6RS" (nstore-var 'R6RS)))
+    (nstore-where txn triplestore
+                  (list scheme "R7RS" (nstore-var 'R7RS))))))
+
+(define (query-scheme-row txn name)
+  (generator-map->list
+   (lambda (x) (list (hashmap-ref x 'name)
+                     (hashmap-ref x 'licence)
+                     (->ok (hashmap-ref x 'GNU/Linux))
+                     (->ok (hashmap-ref x 'Windows))
+                     (->ok (hashmap-ref x 'R6RS))
+                     (->ok (hashmap-ref x 'R7RS))))
+   (nstore-query
+    (nstore-from txn triplestore
+                 (list name "name" (nstore-var 'name)))
+    (nstore-where txn triplestore
+                  (list name "licence" (nstore-var 'licence)))
+    (nstore-where txn triplestore
+                 (list name "GNU/Linux" (nstore-var 'GNU/Linux)))
+    (nstore-where txn triplestore
+                 (list name "Windows" (nstore-var 'Windows)))
+    (nstore-where txn triplestore
+                 (list name "R6RS" (nstore-var 'R6RS)))
+    (nstore-where txn triplestore
+                 (list name "R7RS" (nstore-var 'R7RS))))))
+
+(define (query txn)
+  (let ((schemes (query-schemes txn)))
+    (map (lambda (name) (query-scheme-row txn name)) schemes)))
+
+(define (make-tag symbol)
+  `(li (@ (style ,(make-style '((background . "#f45e61")
+                                (border-radius . "3px")
+                                (display . "inline-block")
+                                (margin-right . "5px")
+                                (padding . "5px")
+                                (color . "black")))))
+    ,(symbol->string symbol)))
+
+(define (box-scheme txn scheme)
+  (let ((scheme (query-scheme txn scheme)))
+    `(div (@ (id "box"))
+          (h3 ,(hashmap-ref scheme 'name))
+          (p ,(hashmap-ref scheme 'tag-line))
+          (p "Licence: " ,(hashmap-ref scheme 'licence))
+          (ul ,@(let loop ((symbols '(GNU/Linux Windows R6RS R7RS))
+                           (out '()))
+                  (if (null? symbols)
+                      out
+                      (if (hashmap-ref scheme (car symbols))
+                          (loop (cdr symbols) (cons (make-tag (car symbols))
+                                                    out))
+                          (loop (cdr symbols) out)_)))))))
+
+(define style-box
+  '((border . "2px solid #f45e61")
+    (border-radius . "3px")
+    (margin-bottom . "15px")
+    (padding . "15px")
+    (background . "hsla(0, 0%, 0%, 0.4)")))
+
+(define style-switch-container
+  (make-style '((display . "flex")
+                (cursor . "pointer")
+                (background . "black")
+                (border . "1px solid #f45e61")
+                (box-shadow "0px 0px 3px #f45e61 inset, 4px 4px 4px black, -1px -1px 2px hsla(0, 0%, 100%, 0.6)")
+                (padding . "2px 2px 2px 10px")
+                (border-radius . "30px")
+                (width . "75px")
+                (height . "100%"))))
+
+(define style-switch-button
+  (make-style '((background . "#f45e61")
+                (flex-grow . "0")
+                (border-radius . "100%")
+                (width . "25px")
+                (height . "25px"))))
+
+
+(define style-switch-container-off
+  (make-style '((display . "flex")
+                (cursor . "pointer")
+                (background . "black")
+                (border . "1px solid gray")
+                (box-shadow "0px 0px 3px #f45e61 inset, 4px 4px 4px black, -1px -1px 2px #f45e61")
+                (padding . "2px 10px 2px 2px")
+                (border-radius . "30px")
+                (width . "75px")
+                (height . "100%"))))
+
+(define style-switch-button-off
+  (make-style '((background . "gray")
+                (flex-grow . "0")
+                (margin-right . "5px")
+                (border-radius . "100%")
+                (width . "25px")
+                (height . "25px"))))
+
+(define style-switch-text
+  (make-style '((font-family . "sans")
+                (font-size . "0.8em")
+                (padding-top . "4px")
+                (flex-grow . "2"))))
+
+(define style-switch-text-off
+  (make-style '((color . "gray")
+                (font-family . "sans")
+                (font-size . "0.8em")
+                (padding-top . "4px")
+                (flex-grow . "2"))))
+
+(define (widget-switch-off)
+  `(div (@ (style ,style-switch-container-off))
+        (div (@ (style ,style-switch-button-off)) "")
+        (p (@ (style ,style-switch-text)) "OFF")))
+
+(define (widget-switch-on)
+  `(div (@ (style ,style-switch-container))
+        (p (@ (style ,style-switch-text)) "ON ")
+        (div (@ (style ,style-switch-button)) "")))
+
+(define (widget-switch boolean)
+  (if boolean (widget-switch-on) (widget-switch-off)))
+
+(define (toggle name)
+  (lambda (model event)
+    (filter-toggle model name)))
+
+(define (r7rs? txn scheme)
+  (nstore-ask? txn triplestore (list scheme "R7RS" #t)))
 
 (define (view txn)
-  (let* ((count ((nstore-from txn triplestore
-                              (list 'count 'count (nstore-var 'count)))))
-         (count (hashmap-ref count 'count)))
-    `(div (@ (id "box"))
-      (h1 ,(number->string count))
-      (button (@ (onClick ,onClick)) "increment"))))
+  (pk
+   `(div
+     (div (@ (style ,(make-style style-box)))
+          (h2 "Filters")
+          (ul (li (@ (style ,(make-style '((display . "flex")
+                                           (justify-content . "space-around")))))
+                  (p "R7RS") (div (@ (onClick ,(toggle 'R7RS)))
+                                  ,(widget-switch (filter-ref txn 'R7RS))))
+          ))
+     ,@(if (filter-ref txn 'R7RS)
+           (let loop ((schemes (pk (query-schemes txn)))
+                      (out '()))
+             (if (null? schemes)
+                 out
+                 (loop (cdr schemes)
+                       (if (r7rs? txn (car schemes))
+                           (cons (box-scheme txn (car schemes)) out)
+                           out))))
+           ;; no R7RS filter, display everything
+           (let loop ((schemes (query-schemes txn))
+                      (out '()))
+             (if (null? schemes)
+                 out
+                 (loop (cdr schemes)
+                       (cons (box-scheme txn (car schemes)) out))))))))
 
 (create-app init view)
 
