@@ -1,6 +1,6 @@
 // https://webpack.js.org/guides/author-libraries/
 const config = {
-    entry: ['./index.js'],
+    entry: ['./helpers.js'],
     output: {
         path: __dirname + '/build',
         filename: 'helpers.js',

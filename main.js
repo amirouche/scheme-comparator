@@ -102,7 +102,7 @@ let translate = function(json) {
 function loop () {
     let json = document.javascript_inbox;
     document.javascript_inbox = undefined;
-    if (json) {
+    if (json !== undefined) {
         if (json[0] === 'patch') {
             patch(json[1]);
         } else if (json[0] === 'xhr') {
@@ -126,6 +126,7 @@ function run_chibi(program, args) {
 }
 
 fetch("main.scm").then(function(response) {
+    console.log("main.scm loaded...")
     response.text().then(function(main) {
         document.javascript_inbox = undefined;
         window.requestAnimationFrame(loop); // !
